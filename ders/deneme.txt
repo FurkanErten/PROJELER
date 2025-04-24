@@ -1,0 +1,64 @@
+import cv2
+import torch
+from ultralytics import YOLO
+from torchvision.ops import box_iou
+
+# YOLOv8 modeli (önceden eğitilmiş model)
+model = YOLO("yolov8n.pt")  # istersen "yolov8s.pt" gibi daha güçlü modeller kullanabilirsin
+
+# 'airplane' sınıfı COCO datasetinde 4 numaradır
+AIRPLANE_CLASS_ID = 4
+
+# Kamera kaynağı (0 = webcam veya bir video dosyası da olabilir)
+cap = cv2.VideoCapture(0)
+
+# Takip için basit ID sistemi
+track_id = 0
+tracks = []
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # YOLO tahmini
+    results = model(frame, verbose=False)[0]
+    boxes = results.boxes
+    current_frame_tracks = []
+
+    for i, box in enumerate(boxes):
+        cls = int(box.cls[0])
+        if cls == AIRPLANE_CLASS_ID:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            current_frame_tracks.append(torch.tensor([x1, y1, x2, y2]))
+
+    # ID eşlemesi (çok basit IoU bazlı)
+    new_tracks = []
+    for box in current_frame_tracks:
+        matched = False
+        for i, (prev_box, prev_id) in enumerate(tracks):
+            iou = box_iou(box.unsqueeze(0), prev_box.unsqueeze(0))[0][0]
+            if iou > 0.3:
+                new_tracks.append((box, prev_id))
+                tracks.pop(i)
+                matched = True
+                break
+        if not matched:
+            track_id += 1
+            new_tracks.append((box, track_id))
+
+    tracks = new_tracks.copy()
+
+    # Görselleştirme
+    for box, id in tracks:
+        x1, y1, x2, y2 = map(int, box)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(frame, f"Ucak ID: {id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (0, 255, 0), 2)
+
+    cv2.imshow("Ucak Takibi - YOLOv8", frame)
+    if cv2.waitKey(1) & 0xFF == 27:  # ESC ile çık
+        break
+
+cap.release()
+cv2.destroyAllWindows()
